@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI-анализатор видеовстреч</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span>AI-анализатор <span class="brand-light">видеовстреч</span></span>
+    </div>
+  </header>
+  <main class="shell">
+    <section class="hero" aria-labelledby="title">
+      <div class="hero-copy">
+        <h1 id="title">Анализ видеовстреч</h1>
+        <p>Загрузите запись встречи и получите расшифровку, решения и задачи на русском языке.</p>
+      </div>
+      <div class="signal" aria-hidden="true">
+        <div class="orbit orbit-outer"></div><div class="orbit orbit-inner"></div>
+        <div class="wave"></div>
+      </div>
+    </section>
+
+    <div class="workspace">
+      <aside class="sidebar" aria-label="Загрузка и история встреч">
+        <section class="panel upload-panel" aria-labelledby="upload-heading">
+          <h2 id="upload-heading">Новая встреча</h2>
+          <div class="drop-zone" id="drop-zone">
+            <span class="upload-mark" aria-hidden="true">↑</span>
+            <input type="file" id="video" accept=".mp4,.webm,video/mp4,video/webm" hidden>
+            <button type="button" id="choose">Выбрать видео</button>
+            <p>или перетащите файл сюда</p>
+          </div>
+          <p class="file-limits">MP4 или WebM · 2–5 минут · до 200 МБ</p>
+          <p id="upload-status" class="feedback" role="status" hidden></p>
+        </section>
+        <section class="panel history-panel" aria-labelledby="history-heading">
+          <div class="panel-heading">
+            <h2 id="history-heading">История встреч</h2>
+            <span id="count" class="count" hidden></span>
+          </div>
+          <p id="history-status" class="muted" role="status">Загружаем историю…</p>
+          <ul id="history" class="history-list"></ul>
+        </section>
+      </aside>
+
+      <section class="panel result-panel" id="result" aria-label="Результаты анализа"></section>
+    </div>
+  </main>
+
+  <template id="empty-result">
+    <div class="empty-result">
+      <div class="document-mark" aria-hidden="true"><span></span></div>
+      <h2>Пока нет результатов</h2>
+      <p>Загрузите видео или выберите встречу из истории. Здесь появятся конспект и расшифровка.</p>
+    </div>
+    <div class="section-preview" aria-hidden="true">
+      <span><b>≡</b> Краткое содержание</span>
+      <span><b>✓</b> Решения</span>
+      <span><b>☷</b> Задачи</span>
+      <span><b>?</b> Открытые вопросы</span>
+    </div>
+  </template>
+</body>
+</html>

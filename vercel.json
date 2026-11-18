@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "outputDirectory": "public",
+  "rewrites": [{ "source": "/api/meetings/:id", "destination": "/api/meetings?id=:id" }],
+  "functions": {
+    "api/meetings.js": {
+      "maxDuration": 300,
+      "includeFiles": "node_modules/@{ffmpeg,ffprobe}-installer/linux-x64/{ffmpeg,ffprobe}"
+    }
+  }
+}
