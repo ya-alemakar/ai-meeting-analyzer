@@ -11,6 +11,11 @@
 }
 
 * { box-sizing: border-box; }
+#cloud-form { display: grid; gap: 12px; margin-top: 16px; }
+#cloud-form label { font-size: 14px; }
+#cloud-url { min-width: 0; width: 100%; padding: 10px; border: 1px solid #bba7de; border-radius: 8px; }
+#cloud-submit { padding: 10px; border: 0; border-radius: 8px; background: #6946b4; color: white; }
+#cloud-submit:disabled { opacity: .6; cursor: wait; }
 body { margin: 0; }
 button, input { font: inherit; }
 button { cursor: pointer; }

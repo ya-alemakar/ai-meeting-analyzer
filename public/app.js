@@ -21,8 +21,9 @@ let displayed = '';
 let pollTimer;
 let refreshId = 0;
 let detailId = 0;
-let maxVideoBytes = 200 * 1024 * 1024;
-let limitLabel = '200 МБ';
+let maxVideoBytes = 10_000_000;
+let limitLabel = '10 МБ';
+let chunkBytes;
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -221,11 +222,26 @@ async function upload(file) {
   choose.disabled = true;
   setFeedback('Загружаем видео…');
   try {
-    const meeting = await request('/api/meetings', {
+    const headers = { 'Content-Type': 'application/octet-stream', 'X-Video-Name': encodeURIComponent(file.name) };
+    let meeting;
+    if (chunkBytes && file.size > chunkBytes) {
+      const id = crypto.randomUUID();
+      headers['X-Video-Size'] = String(file.size);
+      const parts = Math.ceil(file.size / chunkBytes);
+      for (let part = 0; part < parts; part++) {
+        setFeedback(`Загружаем видео… Часть ${part + 1} из ${parts}.`);
+        await request(`/api/meetings?upload=${id}&part=${part}`, {
+          method: 'POST', headers, body: file.slice(part * chunkBytes, (part + 1) * chunkBytes),
+        });
+      }
+      meeting = await request(`/api/meetings?upload=${id}`, { method: 'POST', headers });
+    } else {
+      meeting = await request('/api/meetings', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream', 'X-Video-Name': encodeURIComponent(file.name) },
+      headers,
       body: file,
     });
+    }
     select(meeting);
     setFeedback();
     await refresh();
@@ -262,10 +278,39 @@ document.addEventListener('visibilitychange', () => {
 });
 result.append(document.querySelector('#empty-result').content.cloneNode(true));
 void request('/api/meetings?config=1').then(config => {
-  if (config.maxVideoBytes === 4_000_000) {
+  document.querySelector('#cloud-panel').hidden = !config.cloudImport;
+  if (Number.isInteger(config.maxVideoBytes) && config.maxVideoBytes > 0) {
     maxVideoBytes = config.maxVideoBytes;
-    limitLabel = '4 МБ';
-    document.querySelector('.file-limits').textContent = `MP4 или WebM · 2–5 минут · до ${limitLabel}`;
+    chunkBytes = config.chunkBytes;
+    limitLabel = maxVideoBytes === 200 * 1024 * 1024 ? '200 МБ' : `${maxVideoBytes / 1_000_000} МБ`;
+    document.querySelector('.file-limits').textContent = `MP4 или WebM · до 10 минут · до ${limitLabel}`;
   }
 }).catch(() => {});
 void refresh();
+
+document.querySelector('#cloud-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = document.querySelector('#cloud-submit');
+  const status = document.querySelector('#cloud-status');
+  button.disabled = true;
+  status.hidden = false;
+  status.classList.remove('error');
+  status.textContent = 'Обрабатывается. Проверяем ссылку и скачиваем запись…';
+  try {
+    const meeting = await request('/api/meetings?import=1', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Cloud-Import': '1' },
+      body: JSON.stringify({ url: document.querySelector('#cloud-url').value.trim() }),
+    });
+    status.textContent = meeting.duplicate ?
+      'Эта запись уже есть в истории. Открываем её без повторного AI-анализа.' :
+      'Видео получено. Транскрибация и AI-анализ запущены.';
+    select(meeting);
+    await refresh();
+  } catch (error) {
+    status.classList.add('error');
+    status.textContent = error.message || 'Импорт не удался. Используйте обычную загрузку видео.';
+  } finally {
+    button.disabled = false;
+  }
+});
