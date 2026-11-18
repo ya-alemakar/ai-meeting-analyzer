@@ -7,7 +7,7 @@
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env server.mjs",
-    "check": "node --check server.mjs && node --check process-video.mjs && node --check api/meetings.js && node --check public/app.js"
+    "check": "node --check server.mjs && node --check process-video.mjs && node --check cloud-import.mjs && node --check api/meetings.js && node --check public/app.js"
   },
   "dependencies": {
     "@vercel/blob": "2.9.0",

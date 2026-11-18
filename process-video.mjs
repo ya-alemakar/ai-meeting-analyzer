@@ -31,7 +31,7 @@ async function getDuration(format, videoPath, ffprobe, signal) {
 
   // Потоковые WebM иногда не записывают длительность в заголовок контейнера.
   const { stdout } = await mediaCommand(ffprobe, [
-    '-v', 'error', '-read_intervals', '%+301', '-show_entries', 'packet=pts_time,duration_time',
+    '-v', 'error', '-read_intervals', '%+601', '-show_entries', 'packet=pts_time,duration_time',
     '-of', 'csv=p=0', '-protocol_whitelist', 'file', '-i', videoPath,
   ], signal);
   let start = Infinity;
@@ -157,8 +157,8 @@ export async function processVideo(videoPath, {
     throw new VideoError('Выберите видео в формате MP4 или WebM.');
   }
   const duration = await getDuration(format, videoPath, ffprobe, signal);
-  if (!Number.isFinite(duration) || duration < 120 || duration > 300) {
-    throw new VideoError('Длительность видео должна быть от 2 до 5 минут.');
+  if (!Number.isFinite(duration) || duration <= 0 || duration > 600) {
+    throw new VideoError('Длительность видео должна быть больше нуля и не превышать 10 минут.');
   }
   if (!streams.some(stream => stream.codec_type === 'audio')) {
     throw new VideoError('В видео отсутствует звуковая дорожка.');
@@ -172,7 +172,7 @@ export async function processVideo(videoPath, {
     const audioPath = join(temp, 'meeting.wav');
     await mediaCommand(ffmpeg, [
       '-nostdin', '-v', 'error', '-protocol_whitelist', 'file', '-i', videoPath,
-      '-map', '0:a:0', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-t', '300', audioPath,
+      '-map', '0:a:0', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-t', '600', audioPath,
     ], signal);
     const audio = await readFile(audioPath);
     const data = new FormData();

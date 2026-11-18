@@ -1,4 +1,4 @@
-import { get, list, put } from '@vercel/blob';
+import { del, get, list, put } from '@vercel/blob';
 import { waitUntil } from '@vercel/functions';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -6,8 +6,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { processVideo, VideoError } from '../process-video.mjs';
+import { downloadCloudVideo } from '../cloud-import.mjs';
 
-const maxVideoBytes = 4_000_000;
+const maxVideoBytes = 10_000_000;
+const chunkBytes = 4_000_000;
 const prefix = 'video-meetings/v1/';
 const idPattern = /^[a-f0-9-]{36}$/;
 const json = (data, status = 200, headers = {}) => Response.json(data, {
@@ -76,7 +78,7 @@ async function history() {
   return meetings.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-async function analyze(meeting, extension, bytes) {
+async function analyze(meeting, extension, bytes, claim) {
   let temp;
   let partial = {};
   let finished;
@@ -87,7 +89,7 @@ async function analyze(meeting, extension, bytes) {
     const result = await processVideo(path, {
       ffmpeg: fileURLToPath(new URL('../node_modules/@ffmpeg-installer/linux-x64/ffmpeg', import.meta.url)),
       ffprobe: fileURLToPath(new URL('../node_modules/@ffprobe-installer/linux-x64/ffprobe', import.meta.url)),
-      signal: AbortSignal.timeout(255_000),
+      signal: AbortSignal.timeout(230_000),
       onTranscript: value => { partial = value; },
     });
     finished = { ...meeting, ...result, status: 'ready' };
@@ -101,14 +103,125 @@ async function analyze(meeting, extension, bytes) {
     if (temp) await rm(temp, { recursive: true, force: true }).catch(error => console.error('Cleanup:', error.code));
   }
   await save('result', finished);
+  if (claim && finished.status === 'error') await del(claim);
+}
+
+async function importVideo(request) {
+  if (request.headers.get('x-cloud-import') !== '1') return json({ error: 'Некорректный запрос импорта.' }, 400);
+  try {
+    const { url } = await request.json();
+    if (typeof url !== 'string') throw new VideoError('Введите ссылку на файл.');
+    const { name, bytes, extension } = await downloadCloudVideo(url, maxVideoBytes);
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    const claim = `video-meeting-hashes/${digest}.json`;
+    const meeting = {
+      id: randomUUID(), name, createdAt: new Date().toISOString(),
+      status: 'processing', source: 'cloud', contentHash: digest,
+    };
+    const existing = await get(claim, { access: 'private', useCache: false });
+    let ifMatch;
+    if (existing) {
+      const owner = await new Response(existing.stream).json();
+      const previous = await readMeeting(owner.id);
+      if (previous?.status === 'ready' || (Date.now() - Date.parse(owner.createdAt) < 310_000)) {
+        return json({ ...(previous || owner), duplicate: true });
+      }
+      ifMatch = existing.blob.etag;
+    }
+    try {
+      await put(claim, JSON.stringify(meeting), {
+        access: 'private', contentType: 'application/json',
+        ...(ifMatch ? { allowOverwrite: true, ifMatch } : {}),
+      });
+    } catch (error) {
+      // Атомарное создание или смена владельца исключает параллельный AI-анализ.
+      const owner = await read(claim);
+      if (!owner) throw error;
+      return json({ ...((await readMeeting(owner.id)) || owner), duplicate: true });
+    }
+    try {
+      await save('pending', meeting);
+    } catch (error) {
+      await del(claim);
+      throw error;
+    }
+    waitUntil(analyze(meeting, extension, bytes, claim).catch(error => console.error('Import processing:', error.name)));
+    return json(meeting, 202);
+  } catch (error) {
+    return json({ error: (error instanceof VideoError ? error.message : 'Не удалось импортировать запись.') +
+      ' Можно скачать видео самостоятельно и выбрать «Выбрать видео».' }, 400);
+  }
+}
+
+async function chunkedUpload(request, query, name, extension) {
+  const id = query.get('upload');
+  const size = Number(request.headers.get('x-video-size'));
+  if (!idPattern.test(id || '') || !Number.isInteger(size) || size <= chunkBytes || size > maxVideoBytes) {
+    return json({ error: 'Некорректные параметры загрузки. Максимум 10 МБ.' }, 400);
+  }
+  const count = Math.ceil(size / chunkBytes);
+  const path = index => `video-upload-parts/${id}/${index}`;
+  try {
+    if (query.has('part')) {
+      const index = Number(query.get('part'));
+      if (!Number.isInteger(index) || index < 0 || index >= count) return json({ error: 'Некорректный номер части.' }, 400);
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      const expected = Math.min(chunkBytes, size - index * chunkBytes);
+      if (bytes.length !== expected) return json({ error: 'Размер части файла не совпадает.' }, 400);
+      // Неизменяемые части: повторная отправка подтверждается только для тех же байтов.
+      try {
+        await put(path(index), bytes, { access: 'private', contentType: 'application/octet-stream' });
+      } catch (error) {
+        const existing = await get(path(index), { access: 'private', useCache: false });
+        if (!existing) throw error;
+        const old = Buffer.from(await new Response(existing.stream).arrayBuffer());
+        if (!old.equals(Buffer.from(bytes))) return json({ error: 'Часть файла уже содержит другие данные. Начните загрузку снова.' }, 409);
+      }
+      return json({ received: index });
+    }
+    const previous = await readMeeting(id);
+    if (previous) return json(previous);
+    const pieces = [];
+    for (let index = 0; index < count; index++) {
+      const piece = await get(path(index), { access: 'private', useCache: false });
+      if (!piece || piece.blob.size !== Math.min(chunkBytes, size - index * chunkBytes)) {
+        return json({ error: 'Загрузка не завершена. Выберите файл снова.' }, 400);
+      }
+      pieces.push(Buffer.from(await new Response(piece.stream).arrayBuffer()));
+    }
+    const meeting = { id, name, createdAt: new Date().toISOString(), status: 'processing' };
+    try {
+      await put(path('started'), JSON.stringify(meeting), { access: 'private' });
+    } catch {
+      const existing = await readMeeting(id);
+      return existing ? json(existing) : json({ error: 'Файл уже передаётся на обработку. Обновите историю.' }, 409);
+    }
+    try {
+      await save('pending', meeting);
+    } catch (error) {
+      await del(path('started'));
+      throw error;
+    }
+    waitUntil((async () => {
+      try {
+        await analyze(meeting, extension, Buffer.concat(pieces));
+      } finally {
+        await del([...Array.from({ length: count }, (_, index) => path(index)), path('started')]);
+      }
+    })().catch(error => console.error('Chunk processing:', error.name)));
+    return json(meeting, 202);
+  } catch (error) {
+    console.error('Chunk upload:', error.name);
+    return json({ error: 'Не удалось загрузить файл. Попробуйте выбрать его снова.' }, 503);
+  }
 }
 
 export async function GET(request) {
+  const query = new URL(request.url).searchParams;
+  if (query.has('config')) return json({ maxVideoBytes, chunkBytes, cloudImport: true });
   const access = checkAccess(request);
   if (access) return access;
-  const query = new URL(request.url).searchParams;
   if (query.has('login')) return Response.redirect(new URL('/', request.url), 303);
-  if (query.has('config')) return json({ maxVideoBytes });
   try {
     const id = query.get('id');
     if (id === null) return json(await history());
@@ -123,6 +236,8 @@ export async function GET(request) {
 export async function POST(request) {
   const access = checkAccess(request);
   if (access) return access;
+  const query = new URL(request.url).searchParams;
+  if (query.has('import')) return importVideo(request);
   // A cross-origin form cannot supply the required custom header.
   let name;
   try {
@@ -134,13 +249,14 @@ export async function POST(request) {
   if (!extension || name.length > 255 || /[\\/\x00-\x1f]/.test(name)) {
     return json({ error: 'Выберите файл в формате MP4 или WebM.' }, 400);
   }
+  if (query.has('upload')) return chunkedUpload(request, query, name, extension);
   if (Number(request.headers.get('content-length')) > maxVideoBytes) {
-    return json({ error: 'Выберите непустое видео размером до 4 МБ.' }, 413);
+    return json({ error: 'Выберите непустое видео размером до 10 МБ.' }, 413);
   }
   try {
     const bytes = new Uint8Array(await request.arrayBuffer());
     if (!bytes.length || bytes.length > maxVideoBytes) {
-      return json({ error: 'Выберите непустое видео размером до 4 МБ.' }, 413);
+      return json({ error: 'Выберите непустое видео размером до 10 МБ.' }, 413);
     }
     const meeting = { id: randomUUID(), name, createdAt: new Date().toISOString(), status: 'processing' };
     await save('pending', meeting);

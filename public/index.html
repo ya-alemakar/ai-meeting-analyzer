@@ -36,8 +36,18 @@
             <button type="button" id="choose">Выбрать видео</button>
             <p>или перетащите файл сюда</p>
           </div>
-          <p class="file-limits">MP4 или WebM · 2–5 минут · до 200 МБ</p>
+          <p class="file-limits">MP4 или WebM · до 10 минут · до 10 МБ</p>
           <p id="upload-status" class="feedback" role="status" hidden></p>
+        </section>
+        <section class="panel upload-panel" aria-labelledby="import-heading" id="cloud-panel" hidden>
+          <h2 id="import-heading">Импорт из облака</h2>
+          <form id="cloud-form">
+            <label for="cloud-url">Ссылка на скачивание</label>
+            <input id="cloud-url" type="url" required maxlength="4096" placeholder="https://disk.yandex.ru/i/…" autocomplete="off">
+            <p class="muted">Яндекс.Диск, Dropbox или публичный Vercel Blob. MP4 и WebM, до 10 минут, до 10 МБ. Откройте доступ к скачиванию.</p>
+            <button type="submit" id="cloud-submit">Импортировать запись</button>
+          </form>
+          <p id="cloud-status" class="feedback" role="status" hidden></p>
         </section>
         <section class="panel history-panel" aria-labelledby="history-heading">
           <div class="panel-heading">
