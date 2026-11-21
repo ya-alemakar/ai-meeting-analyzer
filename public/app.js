@@ -24,6 +24,7 @@ let detailId = 0;
 let maxVideoBytes = 10_000_000;
 let limitLabel = '10 МБ';
 let chunkBytes;
+let clearing = false;
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -174,6 +175,7 @@ function select(meeting) {
 }
 
 async function refresh() {
+  if (clearing) return;
   clearTimeout(pollTimer);
   const requestId = ++refreshId;
   let retry = false;
@@ -215,7 +217,7 @@ function setFeedback(message = '', isError = false) {
 }
 
 async function upload(file) {
-  if (!file || choose.disabled) return;
+  if (!file || choose.disabled || clearing) return;
   if (!/\.(mp4|webm)$/i.test(file.name)) return setFeedback('Выберите видео MP4 или WebM.', true);
   if (!file.size || file.size > maxVideoBytes) return setFeedback(`Выберите непустой файл размером до ${limitLabel}.`, true);
 
@@ -290,6 +292,7 @@ void refresh();
 
 document.querySelector('#cloud-form').addEventListener('submit', async event => {
   event.preventDefault();
+  if (clearing) return;
   const button = document.querySelector('#cloud-submit');
   const status = document.querySelector('#cloud-status');
   button.disabled = true;
@@ -312,5 +315,54 @@ document.querySelector('#cloud-form').addEventListener('submit', async event => 
     status.textContent = error.message || 'Импорт не удался. Используйте обычную загрузку видео.';
   } finally {
     button.disabled = false;
+  }
+});
+
+document.querySelector('#clear-history').addEventListener('click', async () => {
+  if (choose.disabled || document.querySelector('#cloud-submit').disabled) {
+    const status = document.querySelector('#clear-status');
+    status.hidden = false;
+    status.textContent = 'Дождитесь завершения загрузки файла или скачивания по ссылке.';
+    return;
+  }
+  if (clearing || !window.confirm('Удалить все встречи, расшифровки и конспекты из общей истории? После этого записи можно обработать заново.')) return;
+  clearing = true;
+  const button = document.querySelector('#clear-history');
+  const status = document.querySelector('#clear-status');
+  const importer = document.querySelector('#cloud-submit');
+  const uploadWasDisabled = choose.disabled;
+  const importWasDisabled = importer.disabled;
+  button.disabled = true;
+  choose.disabled = true;
+  importer.disabled = true;
+  clearTimeout(pollTimer);
+  refreshId++;
+  detailId++;
+  status.hidden = false;
+  status.classList.remove('error');
+  status.textContent = 'Очищаем историю…';
+  try {
+    await request('/api/meetings', { method: 'DELETE', headers: { 'X-Clear-History': '1' } });
+    selectedId = null;
+    displayed = '';
+    meetings = [];
+    const url = new URL(location.href);
+    url.searchParams.delete('meeting');
+    window.history.replaceState(null, '', url);
+    history.replaceChildren();
+    renderHistory();
+    result.replaceChildren(document.querySelector('#empty-result').content.cloneNode(true));
+    setFeedback();
+    document.querySelector('#cloud-status').hidden = true;
+    status.textContent = 'История очищена. Можно загрузить или импортировать запись заново.';
+  } catch (error) {
+    status.classList.add('error');
+    status.textContent = error.message || 'Не удалось очистить историю. Попробуйте снова.';
+  } finally {
+    clearing = false;
+    button.disabled = false;
+    choose.disabled = uploadWasDisabled;
+    importer.disabled = importWasDisabled;
+    void refresh();
   }
 });

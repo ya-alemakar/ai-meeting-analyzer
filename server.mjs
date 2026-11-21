@@ -107,6 +107,13 @@ const server = createServer(async (req, res) => {
       return res.end(body);
     }
     if (path === '/api/meetings') {
+      if (req.method === 'DELETE') {
+        if (req.headers['x-clear-history'] !== '1') {
+          return send(res, 400, { error: 'Подтвердите очистку истории в приложении.' });
+        }
+        const cleared = db.prepare('DELETE FROM meetings').run().changes;
+        return send(res, 200, { cleared });
+      }
       if (req.method === 'GET' && url.searchParams.has('config')) {
         return send(res, 200, { maxVideoBytes: MAX_VIDEO_BYTES });
       }

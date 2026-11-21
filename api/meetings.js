@@ -41,6 +41,7 @@ async function read(path) {
 }
 
 async function readMeeting(id) {
+  if (await read(pathFor('deleted', id))) return null;
   const [finished, pending] = await Promise.all([
     read(pathFor('result', id)), read(pathFor('pending', id)),
   ]);
@@ -66,9 +67,7 @@ async function history() {
   const entries = [...ids];
   const meetings = [];
   for (let offset = 0; offset < entries.length; offset += 12) {
-    const results = await Promise.all(entries.slice(offset, offset + 12).map(([id, file]) => (
-      file === 'result.json' ? read(pathFor('result', id)) : readMeeting(id)
-    )));
+    const results = await Promise.all(entries.slice(offset, offset + 12).map(([id]) => readMeeting(id)));
     for (const meeting of results) {
       if (!meeting) continue;
       const { id, name, createdAt, status } = meeting;
@@ -102,8 +101,16 @@ async function analyze(meeting, extension, bytes, claim) {
   } finally {
     if (temp) await rm(temp, { recursive: true, force: true }).catch(error => console.error('Cleanup:', error.code));
   }
+  if (await read(pathFor('deleted', meeting.id))) return;
   await save('result', finished);
-  if (claim && finished.status === 'error') await del(claim);
+  // Очистка могла совпасть с записью результата фоновой задачи.
+  if (await read(pathFor('deleted', meeting.id))) await del(pathFor('result', meeting.id));
+  if (claim && finished.status === 'error') {
+    const current = await get(claim, { access: 'private', useCache: false });
+    if (current && (await new Response(current.stream).json()).id === meeting.id) {
+      await del(claim, { ifMatch: current.blob.etag });
+    }
+  }
 }
 
 async function importVideo(request) {
@@ -123,7 +130,8 @@ async function importVideo(request) {
     if (existing) {
       const owner = await new Response(existing.stream).json();
       const previous = await readMeeting(owner.id);
-      if (previous?.status === 'ready' || (Date.now() - Date.parse(owner.createdAt) < 310_000)) {
+      const removed = await read(pathFor('deleted', owner.id));
+      if (!removed && (previous?.status === 'ready' || (Date.now() - Date.parse(owner.createdAt) < 310_000))) {
         return json({ ...(previous || owner), duplicate: true });
       }
       ifMatch = existing.blob.etag;
@@ -230,6 +238,28 @@ export async function GET(request) {
   } catch (error) {
     console.error('Cloud read:', error.code ?? error.name);
     return json({ error: 'Не удалось открыть облачную историю.' }, 503);
+  }
+}
+
+export async function DELETE(request) {
+  const access = checkAccess(request);
+  if (access) return access;
+  if (request.headers.get('x-clear-history') !== '1') {
+    return json({ error: 'Подтвердите очистку истории в приложении.' }, 400);
+  }
+  try {
+    const meetings = await history();
+    for (const meeting of meetings) {
+      // Метка скрывает и результаты уже работающих фоновых задач.
+      await put(pathFor('deleted', meeting.id), JSON.stringify({ id: meeting.id }), {
+        access: 'private', contentType: 'application/json', allowOverwrite: true,
+      });
+      await del([pathFor('pending', meeting.id), pathFor('result', meeting.id)]);
+    }
+    return json({ cleared: meetings.length });
+  } catch (error) {
+    console.error('Clear history:', error.code ?? error.name);
+    return json({ error: 'Не удалось полностью очистить историю. Повторите очистку.' }, 503);
   }
 }
 
